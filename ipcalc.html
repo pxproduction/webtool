@@ -1,0 +1,304 @@
+<html>
+	<head>
+		<script>
+//::Color::
+let inputTextBgVal = "Green";
+let inputTextBgErr = "Orange";
+
+//:GLOBAL FUNCTION:
+function isValidIP(ipQry, typeQry) {
+/*
+::Check IP validation::
+- return boolean
+- split input to array
+- check length == 4
+- #for check each octet int| !< 0 | !>255
+*/
+	let octets = ipQry.split(".");
+	
+	if (octets.length !== 4) {
+		console.error("IPchk: length error: " + octets.length);
+		return false;
+	}
+	
+	for (let i = 0; i < octets.length; i++) {
+		let octet = parseInt(octets[i]);
+		if (octets[i] !== octet.toString() || isNaN(octet) || octet < 0 || octet > 255) {
+			console.error("IPchk: octet error: " + ipQry);
+			return false;
+			break;
+		}
+	}
+	
+/*
+::SUBNET validation::
+- subnet mask is '1' binary sequence
+- check no another '0' after first '0'
+*/
+	if (typeQry == "subnet") {
+		let binaryMask = octets.map(octet => parseInt(octet).toString(2).padStart(8, "0")).join("");
+		let firstZeroIndex = binaryMask.indexOf("0");
+
+		if (firstZeroIndex !== -1 && binaryMask.slice(firstZeroIndex).includes("1")) {
+			return false;
+		}
+	}
+	
+	return true;
+}
+
+function subnetMask2Prefix(subnetMask) {
+/*
+::Convert subnetMask to CIDR Prefix/X::
+- return boolean
+- prerequisite: subnet validation
+- calculate bit '1' in subnetMask
+*/
+
+	let octets = subnetMask.split(".");
+	let octet;
+	let binaryMask = octets.map(octet => parseInt(octet).toString(2).padStart(8, "0"));
+	let binaryString = binaryMask.join("");
+	let prefixLength = binaryString.split("1").length - 1;
+
+	return prefixLength;
+}
+
+function prefix2SubnetMask(cidr) {
+/*
+::Convert CIDR Prefix/X to subnetMask::
+- return subnetMask
+- prerequisite: CIDR validation
+- CIDR: Classless Inter-Domain Routing
+- calculate binary sequence subnet mask
+- group binary sequence in 8-bit form
+*/
+//check CIDR validation
+	if (cidr !== parseInt(cidr) || !Number.isInteger(cidr) || isNaN(cidr) || cidr < 0 || cidr > 32) {
+		console.log("Invalid CIDR",cidr);
+		return false;
+	}
+//
+
+	let octets = [];
+	let mask = "";
+	for (let i = 0; i < 32; i++) {
+		if (i < cidr) {
+			mask += "1";
+		} else {
+			mask += "0";
+		}
+	}
+	for (let i = 0; i < 4; i++) {
+		var octet = mask.substr(i * 8, 8);
+		octets.push(parseInt(octet, 2));
+	}
+
+	return octets.join(".");
+}
+
+function getNetworkInfo(ipQry, subnetMask) {
+/*
+::Generate Network Info::
+- return Object Netwoek Info {ipNetwork, ipBroadcast, ipHostMin, ipHostMax, hostCount}
+- prerequisite: IP/subnetMask validation
+*/
+	let octetsIpQry = ipQry.split(".");
+	let octetsMask = subnetMask.split(".");
+
+//network IP
+	let octetsNetwork = [];
+	for (let i = 0; i < 4; i++) {
+		//AND then push in array
+		octetsNetwork.push(parseInt(octetsIpQry[i]) & parseInt(octetsMask[i]));
+	}
+	let ipNetwork = octetsNetwork.join(".");
+
+//hostmin IP
+	octetsNetwork[octetsNetwork.length - 1]++;
+	let ipHostMin = (subnetMask2Prefix(subnetMask) < 30) ? octetsNetwork.join(".") : "";
+
+//broadcast IP
+	let octetsMaskInv = octetsMask.map(octet => 255 - parseInt(octet));
+	let octetsBroadcast = [];
+	for (let i = 0; i < 4; i++) {
+		//OR then push in array
+		octetsBroadcast.push(parseInt(octetsIpQry[i]) | octetsMaskInv[i]);
+	}
+	let ipBroadcast = octetsBroadcast.join(".");
+
+//hostmax IP
+	octetsBroadcast[octetsBroadcast.length - 1]--;
+	let ipHostMax = (subnetMask2Prefix(subnetMask) < 30) ? octetsBroadcast.join(".") : "";
+
+//hostCount
+	let hostCount = Math.pow(2, 32 - subnetMask2Prefix(subnetMask));
+
+	return {
+		ipNetwork,
+		ipBroadcast,
+		ipHostMin,
+		ipHostMax,
+		hostCount
+	};
+}
+
+function getNetworkHosts(ipQry, subnetMask) {
+/*
+::Generate all hosts in subnet::
+- return Arrays [..hosts]
+- CAUTION: deny when cidr > 22
+- ในบรรทัดที่กล่าวถึง (i >> (8 * (3 - j))) & 255) มีหลายองค์ประกอบที่ทำงานร่วมกัน:
+i คือตัวแปรที่ใช้ในลูปเพื่อวนลูปสร้างที่อยู่ IP ที่เป็นไปได้ในเครือข่าย subnet mask ที่กำหนด
+>> คือตัวดำเนินการทิศทางขวา (right shift) ในกรณีนี้ i >> (8 * (3 - j)) หมายถึงการเลื่อนตำแหน่งของตัวแปร i 8 บิตไปทางขวา (ทางบวก) โดยจำนวนบิตที่เลื่อนตำแหน่งจะขึ้นอยู่กับค่า j ซึ่งเป็นดัชนีของตำแหน่งของหลักเลข IP (0-3)
+(3 - j) คือการลบค่า j ออกจาก 3 เพื่อให้ได้ดัชนีที่เป็นลำดับตรงกันข้ามของตำแหน่งหลักเลข IP ที่กำลังพิจารณา
+8 * (3 - j) หมายถึงการคูณ 8 กับผลลัพธ์ของการลบ (3 - j) เพื่อให้ได้จำนวนบิตที่ต้องเลื่อนตำแหน่ง
+& 255 คือตัวดำเนินการแบบแล็คบิต (bitwise AND) กับ 255 (11111111 ในรูปแบบทศนิยม) ซึ่งจะทำให้เก็บเฉพาะส่วนที่เป็น 8 บิตที่เกี่ยวข้องกับตำแหน่งหลักเลข IP
+ด้วยการใช้ (i >> (8 * (3 - j))) & 255 เราสามารถเลื่อนตำแหน่งและจัดเก็บเฉพาะหลักเลข IP ที่เป็นไปได้ในที่อยู่ IP ทั้งหมดที่อยู่ใน subnet mask ที่กำหนดไว้ในตัวแปร i
+*/
+	if (subnetMask2Prefix(subnetMask) < 22) {
+		console.error("This function will use too much consumption with input.\nDeny to excecute.");
+		return false;
+	}
+
+	let ipHosts = [];
+	let networkInfo = getNetworkInfo(ipQry, subnetMask);
+	let octetsNetwork = networkInfo.ipNetwork.split(".");
+	for (let i = 1; i < networkInfo.hostCount - 1; i++) {
+		let octetsHostElement = [...octetsNetwork];	//duplicate array (member as string)
+		for (let j = 3; j >= 0; j--) {	//IP with 4 bytes
+			octetsHostElement[j] = parseInt(octetsHostElement[j]) + (i >> (8 * (3 - j))) & 255;	//mask procedure
+		}
+		ipHosts.push(octetsHostElement.join("."));
+	}
+	
+	return ipHosts;
+}
+		</script>
+	</head>
+
+	<body>
+<div style="font-size:10px">&#169; version 1.1.20230628 by <a href="mailto:pxproduction+code@gmail.com">Px Production</a></div>
+<br>
+IP Address
+<input type="text" size="10" maxlength="17" id="form[IP]" name="in_LAN_if" placeholder="xxx.xxx.xxx.xxx" required class="form_require">
+Subnet Mask
+<select name="in_LAN_mask" id="form[Mask]" class="form_require"></select>
+<br><br>
+<button type="submit" id="Submit_Gen" name="submit" onClick="exec();">IP Calculate</button>
+
+<span id="result"></span>
+<span id="hosts"></span>
+
+<script>
+//Create <option> of subnet mask
+let docFrag = document.createDocumentFragment();
+for (let i = 32; i >= 0; i--) {
+	let optionElement = document.createElement('option');
+	let optionVal = prefix2SubnetMask(i);
+	optionElement.textContent = "/" + i + " " + optionVal;	//textContent
+	docFrag.appendChild(optionElement);
+	document.getElementById("form[Mask]").appendChild(docFrag);	//destination id="form[Mask]"
+	document.getElementsByTagName("option")[32 - i].value = optionVal;	//set attribute.value for <option>
+	if (i == 32 - 24) {
+		document.getElementsByTagName("option")[32 - 24].selected = true;
+	}
+}
+
+//:LOCAL FUNCTION:
+function exec() {
+//Main function
+	let netInfo, netInfoTxt, hosts, hostsTxt;
+	if (validateForm()) {
+		let NW = {};
+		NW.ip = document.getElementById("form[IP]").value;
+		NW.mask = document.getElementById("form[Mask]").value;
+		
+		netInfo = getNetworkInfo(NW.ip, NW.mask);
+		NW.net = netInfo.ipNetwork;
+		NW.bc =  netInfo.ipBroadcast;
+		NW.host = netInfo.hostCount;
+		NW.hostmin = netInfo.ipHostMin;
+		NW.hostmax = netInfo.ipHostMax;
+		NW.prf = subnetMask2Prefix(NW.mask);
+		
+		netInfoTxt = `IP: ${NW.ip}/${NW.prf}
+Network: ${NW.net}
+Broadcast: ${NW.bc}
+Hosts/net: ${NW.host}
+Host Min: ${NW.hostmin}
+Host Max: ${NW.hostmax}
+`;
+		if (parseInt(NW.prf) >= 22) {
+			hosts = getNetworkHosts(NW.ip, NW.mask);
+			hostsTxt = "Hosts: ";
+			for (let i of hosts) {
+				hostsTxt = `${hostsTxt}${i}<br>`;
+			}
+		} else {
+			hostsTxt = "[Violation] input (prefix < 22) may cause system damage.";
+		}
+	} else {
+		netInfoTxt = hostsTxt = "";
+	}
+	document.getElementById("result").innerHTML = "<pre>"+netInfoTxt+"</pre>";
+	document.getElementById("hosts").innerHTML = "<pre>"+hostsTxt+"</pre>";
+}
+
+function validateForm() {
+/*
+::Validate input by <input class="form_require">::
+- return boolean
+*/
+//Chk input
+	let formElement = document.getElementsByClassName("form_require");
+	let err = 0;
+	
+//hilight invalid input
+	for (let i = 0; i < formElement.length; i++) {
+		if (formElement[i].value == "") {
+			console.error("Invalid input [Blank]", formElement[i].id);
+			formElement[i].style.borderColor = inputTextBgErr;
+			document.getElementById(formElement[i].id).placeholder = "Invalid input [Blank]";
+			err++;
+		} else {
+			formElement[i].style.borderColor = inputTextBgVal;
+		}	
+
+		if (formElement[i].id == "form[IP]") {
+			if (!isValidIP(formElement[i].value)) {
+				console.error("Invalid input [IP]", formElement[i].id);
+				formElement[i].style.borderColor = inputTextBgErr;
+				document.getElementById(formElement[i].id).placeholder = "Invalid input [IP]";
+				err++;
+			} else {
+				formElement[i].style.borderColor = inputTextBgVal;
+			}
+		}
+	
+		if (formElement[i].id == "form[Mask]") {
+			if (!isValidIP(formElement[i].value, "subnet")) {
+				console.error("Invalid input [subnet]", formElement[i].id);
+				formElement[i].style.borderColor = inputTextBgErr;
+				document.getElementById(formElement[i].id).placeholder = "Invalid input [subnet]";
+				err++;
+			} else {
+				formElement[i].style.borderColor = inputTextBgVal;
+			}
+		}
+	}
+
+	//document.getElementById(formElement[i].id).focus();
+	//console.log(err);
+	//["form[Mask]"].includes(formElement[i].id)
+	if (err > 0) {
+		return false;
+	}
+	
+	return true;
+}
+
+</script>
+
+	</body>
+</html>
